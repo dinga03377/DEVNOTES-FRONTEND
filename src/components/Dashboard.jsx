@@ -16,6 +16,9 @@ import {
   Loader2,
   FileDown,
   GripVertical,
+  AlignLeft,
+  Hash,
+  Eye,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -33,6 +36,8 @@ import { useNavigate } from "react-router-dom";
 import { useContext, useRef } from "react";
 import { ThemeContext } from "../context/ThemeContext";
 import ReactQuill from "react-quill-new";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -78,6 +83,7 @@ const Dashboard = () => {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("Personal");
+  const [format, setFormat] = useState("html");
   const [notes, setNotes] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -152,6 +158,7 @@ const searchRef = useRef();
     setTitle(note.title);
     setContent(note.content);
     setCategory(note.category || "Personal");
+    setFormat(note.format || "html");
     setEditId(note._id);
     setShowModal(true);
   };
@@ -195,6 +202,7 @@ const searchRef = useRef();
           title,
           content,
           category,
+          format,
         });
 
         fetchNotes();
@@ -207,6 +215,7 @@ const searchRef = useRef();
           title,
           content,
           category,
+          format,
         });
 
         setNotes((prev) => [newNote, ...prev]);
@@ -217,6 +226,7 @@ const searchRef = useRef();
       setTitle("");
       setContent("");
       setCategory("Personal");
+      setFormat("html");
       setEditId(null);
       setShowModal(false);
 
@@ -866,10 +876,19 @@ const handleDragEnd = (result) => {
 
                 <div className="flex items-start justify-between mb-3">
 
-                  <span className={`inline-flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-full ${style.chip}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
-                    {note.category || "Personal"}
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-full ${style.chip}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                      {note.category || "Personal"}
+                    </span>
+
+                    {note.format === "markdown" && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400">
+                        <Hash size={9} />
+                        md
+                      </span>
+                    )}
+                  </div>
 
                   <div
                     {...provided.dragHandleProps}
@@ -895,12 +914,20 @@ const handleDragEnd = (result) => {
                   {note.title}
                 </h3>
 
-                <div
-                  className="text-stone-600 dark:text-stone-300 mb-5 line-clamp-4 prose dark:prose-invert max-w-none prose-sm"
-                  dangerouslySetInnerHTML={{
-                    __html: note.content,
-                  }}
-                />
+                {note.format === "markdown" ? (
+                  <div className="text-stone-600 dark:text-stone-300 mb-5 line-clamp-4 prose dark:prose-invert max-w-none prose-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {note.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div
+                    className="text-stone-600 dark:text-stone-300 mb-5 line-clamp-4 prose dark:prose-invert max-w-none prose-sm"
+                    dangerouslySetInnerHTML={{
+                      __html: note.content,
+                    }}
+                  />
+                )}
 
                 <div className="flex items-center justify-between pt-3 border-t border-stone-100 dark:border-stone-800">
 
@@ -1044,16 +1071,92 @@ const handleDragEnd = (result) => {
               })}
             </div>
 
-            <div className="mb-5">
+            {/* Format toggle — Rich Text keeps the existing ReactQuill editor
+                exactly as before; Markdown is a new, separate editing path.
+                Switches use the same setFormat setter, nothing else changes. */}
+            <div className="flex items-center gap-1.5 p-1 mb-4 rounded-xl bg-stone-100 dark:bg-stone-800 w-fit">
+              <button
+                type="button"
+                onClick={() => setFormat("html")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  format === "html"
+                    ? "bg-white dark:bg-stone-950 text-stone-900 dark:text-white shadow-sm"
+                    : "text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-white"
+                }`}
+              >
+                <AlignLeft size={13} />
+                Rich Text
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormat("markdown")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  format === "markdown"
+                    ? "bg-white dark:bg-stone-950 text-stone-900 dark:text-white shadow-sm"
+                    : "text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-white"
+                }`}
+              >
+                <Hash size={13} />
+                Markdown
+              </button>
+            </div>
 
-               <ReactQuill
-                 theme="snow"
-                 value={content}
-                 onChange={setContent}
-                 className="bg-white dark:bg-stone-800 rounded-xl text-black dark:text-white"
-               />
-             
-             </div>
+            {format === "markdown" ? (
+
+              <div className="mb-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+
+                {/* Raw markdown input */}
+                <div>
+                  <p className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wide text-stone-400 dark:text-stone-500 mb-1.5">
+                    <Hash size={11} /> Write
+                  </p>
+                  <textarea
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder={"# Heading\n\n- list item\n- **bold** and _italic_"}
+                    rows={10}
+                    className="w-full p-3.5 rounded-xl bg-stone-100 dark:bg-stone-800 border border-stone-200
+                    dark:border-stone-700 outline-none text-stone-800 dark:text-white font-mono text-sm
+                    focus:border-teal-500 transition resize-y"
+                  />
+                </div>
+
+                {/* Live preview */}
+                <div>
+                  <p className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wide text-stone-400 dark:text-stone-500 mb-1.5">
+                    <Eye size={11} /> Preview
+                  </p>
+                  <div className="h-[calc(100%-1.25rem)] min-h-[196px] p-3.5 rounded-xl bg-white dark:bg-stone-900
+                  border border-stone-200 dark:border-stone-700 overflow-y-auto
+                  prose dark:prose-invert prose-sm max-w-none">
+                    {content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {content}
+                      </ReactMarkdown>
+                    ) : (
+                      <p className="text-stone-400 dark:text-stone-600 text-sm italic">
+                        Preview will appear here...
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
+            ) : (
+
+              <div className="mb-5">
+
+                 <ReactQuill
+                   theme="snow"
+                   value={content}
+                   onChange={setContent}
+                   className="bg-white dark:bg-stone-800 rounded-xl text-black dark:text-white"
+                 />
+               
+               </div>
+
+            )}
 
             <div className="flex justify-end mt-2 mb-2">
               <p className="text-xs font-mono text-stone-400 dark:text-stone-500">
