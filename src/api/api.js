@@ -94,6 +94,60 @@ export const pinNote = async (id) => {
   return res.data;
 };
 
+export const uploadVoiceNote = async (id, formData) => {
+
+  const res = await API.patch(
+    `/notes/${id}/voice`,
+    formData,
+    {
+      ...getConfig(),
+      headers: {
+        ...getConfig().headers,
+        "Content-Type": "multipart/form-data",
+      },
+    }
+  );
+
+  return res.data;
+};
+
+export const deleteVoiceNote = async (id) => {
+
+  const res = await API.delete(
+    `/notes/${id}/voice`,
+    getConfig()
+  );
+
+  return res.data;
+};
+
+export const shareNote = async (id) => {
+
+  const res = await API.patch(
+    `/notes/${id}/share`,
+    {},
+    getConfig()
+  );
+
+  return res.data;
+};
+
+export const unshareNote = async (id) => {
+
+  const res = await API.delete(
+    `/notes/${id}/share`,
+    getConfig()
+  );
+
+  return res.data;
+};
+
+// Public — no auth required, this is what the /shared/:token page calls.
+export const getSharedNote = async (token) => {
+  const res = await API.get(`/notes/shared/${token}`);
+  return res.data;
+};
+
 export const delateNotes = async (id) => {
 const res = await API.delete(`/notes/${id}`, getConfig());
 return res.data;

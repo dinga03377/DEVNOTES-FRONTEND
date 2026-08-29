@@ -19,6 +19,10 @@ import {
   AlignLeft,
   Hash,
   Eye,
+  Bell,
+  BellRing,
+  BellOff,
+  Share2,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -30,6 +34,7 @@ import {
   uploadProfileImage,
   getProfile,
   pinNote,
+  shareNote,
 } from "../api/api";
 
 import { useNavigate } from "react-router-dom";
@@ -38,6 +43,8 @@ import { ThemeContext } from "../context/ThemeContext";
 import ReactQuill from "react-quill-new";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import VoiceRecorder from "./VoiceRecorder";
+import ShareNote from "./ShareNote";
 import { motion, AnimatePresence } from "framer-motion";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -76,6 +83,33 @@ const getCategoryStyle = (cat) => CATEGORY_STYLES[cat] || CATEGORY_STYLES.Person
 
 const CATEGORY_OPTIONS = ["Personal", "Work", "Ideas", "School"];
 
+// Reminders — small pure helpers, no state/hooks. Convert between the native
+// <input type="datetime-local"> value format and a real Date/ISO string.
+const toDatetimeLocalValue = (dateInput) => {
+  if (!dateInput) return "";
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+};
+
+const fromDatetimeLocalValue = (value) => {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+};
+
+const formatReminder = (dateInput) => {
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
 const Dashboard = () => {
 
   const [editId, setEditId] = useState(null);
@@ -84,6 +118,7 @@ const Dashboard = () => {
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("Personal");
   const [format, setFormat] = useState("html");
+  const [reminderAt, setReminderAt] = useState("");
   const [notes, setNotes] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -95,6 +130,7 @@ const Dashboard = () => {
 
 const sidebarRef = useRef();
 const searchRef = useRef();
+const notifiedRemindersRef = useRef(new Set());
 
   const navigate = useNavigate();
 
@@ -159,6 +195,7 @@ const searchRef = useRef();
     setContent(note.content);
     setCategory(note.category || "Personal");
     setFormat(note.format || "html");
+    setReminderAt(toDatetimeLocalValue(note.reminderAt));
     setEditId(note._id);
     setShowModal(true);
   };
@@ -203,6 +240,7 @@ const searchRef = useRef();
           content,
           category,
           format,
+          reminderAt: fromDatetimeLocalValue(reminderAt),
         });
 
         fetchNotes();
@@ -216,6 +254,7 @@ const searchRef = useRef();
           content,
           category,
           format,
+          reminderAt: fromDatetimeLocalValue(reminderAt),
         });
 
         setNotes((prev) => [newNote, ...prev]);
@@ -227,6 +266,7 @@ const searchRef = useRef();
       setContent("");
       setCategory("Personal");
       setFormat("html");
+      setReminderAt("");
       setEditId(null);
       setShowModal(false);
 
@@ -382,6 +422,79 @@ const handlePin = async (id) => {
   }
 };
 
+// Clear a note's reminder — reuses the same updateNotes API call as
+// editing, just with reminderAt set to null.
+const handleClearReminder = async (id) => {
+
+  try {
+
+    const updatedNote = await updateNotes(id, { reminderAt: null });
+
+    setNotes((prev) =>
+      prev.map((note) =>
+        note._id === id ? updatedNote : note
+      )
+    );
+
+    notifiedRemindersRef.current.delete(id);
+
+    toast.success("Reminder cleared");
+
+  } catch (error) {
+
+    console.log(error);
+
+    toast.error("Failed to clear reminder");
+  }
+};
+
+// Voice notes — VoiceRecorder handles the recording/upload/delete calls
+// itself; this just syncs the returned note back into local state, the
+// same pattern used by handlePin and handleClearReminder.
+const handleVoiceUpdated = (updatedNote) => {
+  setNotes((prev) =>
+    prev.map((note) =>
+      note._id === updatedNote._id ? updatedNote : note
+    )
+  );
+};
+
+// Sharing — same sync pattern as handleVoiceUpdated, used by the ShareNote
+// widget in the modal.
+const handleShareUpdated = (updatedNote) => {
+  setNotes((prev) =>
+    prev.map((note) =>
+      note._id === updatedNote._id ? updatedNote : note
+    )
+  );
+};
+
+// One-click share from a note card: generates a link if the note isn't
+// already shared, then copies it straight to the clipboard.
+const handleQuickShare = async (note) => {
+
+  try {
+
+    let target = note;
+
+    if (!target.shareToken) {
+      target = await shareNote(note._id);
+      handleShareUpdated(target);
+    }
+
+    const url = `${window.location.origin}/shared/${target.shareToken}`;
+
+    await navigator.clipboard.writeText(url);
+
+    toast.success("Share link copied!");
+
+  } catch (error) {
+
+    console.log(error);
+    toast.error("Failed to share note");
+  }
+};
+
 const handleDragEnd = (result) => {
 
   if (!result.destination) return;
@@ -418,6 +531,55 @@ const handleDragEnd = (result) => {
     return () => document.removeEventListener("keydown", handleShortcut);
 
   }, []);
+
+  // Ask for browser notification permission once, on first load.
+  useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Note reminders — polls loaded notes every 20s and fires a local
+  // notification (+ toast) once per note per session when its reminder
+  // time has passed. This only works while the app tab is open; it does
+  // not use push notifications or a backend scheduler.
+  useEffect(() => {
+
+    const checkReminders = () => {
+
+      const now = Date.now();
+
+      notes.forEach((note) => {
+
+        if (!note.reminderAt) return;
+        if (notifiedRemindersRef.current.has(note._id)) return;
+
+        const due = new Date(note.reminderAt).getTime();
+        if (isNaN(due) || due > now) return;
+
+        notifiedRemindersRef.current.add(note._id);
+
+        if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "granted"
+        ) {
+          new Notification("DevNotes reminder", {
+            body: note.title,
+            tag: note._id,
+          });
+        }
+
+        toast(`⏰ Reminder: ${note.title}`, { icon: "🔔" });
+      });
+    };
+
+    checkReminders();
+
+    const interval = setInterval(checkReminders, 20000);
+
+    return () => clearInterval(interval);
+
+  }, [notes]);
 
   // Filter Notes
   const filteredNotes =
@@ -900,15 +1062,52 @@ const handleDragEnd = (result) => {
 
                 </div>
 
-                {note.pinned && (
-                  <div
-                    className="inline-flex items-center gap-1 text-xs font-medium mb-3
-                    px-2 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
-                  >
-                    <Pin size={11} className="fill-amber-600 dark:fill-amber-400" />
-                    Pinned
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+
+                  {note.pinned && (
+                    <div
+                      className="inline-flex items-center gap-1 text-xs font-medium
+                      px-2 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
+                    >
+                      <Pin size={11} className="fill-amber-600 dark:fill-amber-400" />
+                      Pinned
+                    </div>
+                  )}
+
+                  {note.reminderAt && (() => {
+                    const overdue = new Date(note.reminderAt).getTime() <= Date.now();
+                    return (
+                      <div
+                        className={`inline-flex items-center gap-1.5 text-xs font-medium
+                        px-2 py-1 rounded-full ${
+                          overdue
+                            ? "bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400"
+                            : "bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400"
+                        }`}
+                      >
+                        {overdue ? <BellRing size={11} /> : <Bell size={11} />}
+                        {formatReminder(note.reminderAt)}
+                        <button
+                          type="button"
+                          onClick={() => handleClearReminder(note._id)}
+                          className="hover:opacity-70 transition"
+                          title="Clear reminder"
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {note.shareToken && (
+                    <div className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full
+                    bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400">
+                      <Share2 size={11} />
+                      Shared
+                    </div>
+                  )}
+
+                </div>
 
                 <h3 className="font-display text-xl font-semibold text-stone-800 dark:text-white mb-3">
                   {note.title}
@@ -926,6 +1125,14 @@ const handleDragEnd = (result) => {
                     dangerouslySetInnerHTML={{
                       __html: note.content,
                     }}
+                  />
+                )}
+
+                {note.voiceNoteUrl && (
+                  <audio
+                    controls
+                    src={note.voiceNoteUrl}
+                    className="w-full h-9 mb-4"
                   />
                 )}
 
@@ -955,6 +1162,26 @@ const handleDragEnd = (result) => {
                         className={
                           note.pinned
                             ? "text-amber-500 fill-amber-500"
+                            : "text-stone-500"
+                        }
+                      />
+                    </button>
+
+                    <button
+                      onClick={() => handleQuickShare(note)}
+                      className={`p-2 rounded-lg transition
+                      ${
+                        note.shareToken
+                          ? "bg-teal-100 dark:bg-teal-900/30"
+                          : "bg-stone-100 dark:bg-stone-800 hover:bg-teal-50 dark:hover:bg-teal-900/20"
+                      }`}
+                      title={note.shareToken ? "Copy share link" : "Share note"}
+                    >
+                      <Share2
+                        size={15}
+                        className={
+                          note.shareToken
+                            ? "text-teal-600 dark:text-teal-400"
                             : "text-stone-500"
                         }
                       />
@@ -1070,6 +1297,61 @@ const handleDragEnd = (result) => {
                 );
               })}
             </div>
+
+            {/* Reminder — optional, purely additive. Fires a local
+                notification/toast once the time passes while the app is open. */}
+            <div className="mb-4">
+              <label className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wide text-stone-400 dark:text-stone-500 mb-1.5">
+                <Bell size={11} /> Remind me (optional)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="datetime-local"
+                  value={reminderAt}
+                  onChange={(e) => setReminderAt(e.target.value)}
+                  className="flex-1 p-3 rounded-xl bg-stone-100 dark:bg-stone-800 border border-stone-200
+                  dark:border-stone-700 outline-none text-stone-800 dark:text-white text-sm
+                  focus:border-teal-500 transition"
+                />
+                {reminderAt && (
+                  <button
+                    type="button"
+                    onClick={() => setReminderAt("")}
+                    className="p-3 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 hover:text-rose-500 transition"
+                    title="Remove reminder"
+                  >
+                    <BellOff size={15} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Voice note — needs a real note id to attach audio to, so it's
+                only offered once the note has been saved at least once. */}
+            {editId ? (
+              <VoiceRecorder
+                noteId={editId}
+                existingUrl={notes.find((n) => n._id === editId)?.voiceNoteUrl || null}
+                onChange={handleVoiceUpdated}
+              />
+            ) : (
+              <div className="mb-4 p-3 rounded-xl bg-stone-50 dark:bg-stone-800/50 border border-dashed border-stone-200 dark:border-stone-700 text-xs text-stone-400 dark:text-stone-500 text-center">
+                Save the note first to record a voice memo
+              </div>
+            )}
+
+            {/* Sharing — same "needs a saved note" constraint as voice notes. */}
+            {editId ? (
+              <ShareNote
+                noteId={editId}
+                shareToken={notes.find((n) => n._id === editId)?.shareToken || null}
+                onChange={handleShareUpdated}
+              />
+            ) : (
+              <div className="mb-4 p-3 rounded-xl bg-stone-50 dark:bg-stone-800/50 border border-dashed border-stone-200 dark:border-stone-700 text-xs text-stone-400 dark:text-stone-500 text-center">
+                Save the note first to create a share link
+              </div>
+            )}
 
             {/* Format toggle — Rich Text keeps the existing ReactQuill editor
                 exactly as before; Markdown is a new, separate editing path.
